@@ -1,8 +1,8 @@
 description = """
 Witness patrol loop. Poured as a root-only wisp on startup:
 
-  gc bd mol wisp mol-witness-patrol --root-only --var binding_prefix='{{binding_prefix}}'
-  gc bd update $WISP --assignee=$GC_AGENT
+  gc bd --city="$GC_CITY_PATH" mol wisp mol-witness-patrol --root-only --var binding_prefix='{{binding_prefix}}'
+  gc bd --city="$GC_CITY_PATH" update $WISP --assignee=$GC_AGENT
 
 Each wisp is ONE iteration: check for work, patrol, pour the next
 iteration. On crash, re-read the formula steps and determine where
@@ -172,7 +172,7 @@ assignees use the shape `<rig>/{{binding_prefix}}<polecat-suffix>`.
 Get the full session roster for liveness checks:
 ```bash
 gc session list --state=all --json
-gc bd list --type=session --label=gc:session --include-infra --include-gates --all --json --limit=0
+gc bd --city="$GC_CITY_PATH" list --type=session --label=gc:session --include-infra --include-gates --all --json --limit=0
 ```
 
 For each bead with an assignee, check **session-ID liveness** — NOT
@@ -220,7 +220,7 @@ a NEW session with a different ID — the old one never comes back.
 
      SESSIONS_FILE=$(mktemp); SESSION_BEADS_FILE=$(mktemp)
      gc session list --state=all --json > "$SESSIONS_FILE" || MAP_QUERY_RC=1
-     gc bd list --type=session --label=gc:session --include-infra --include-gates --all --json --limit=0 > "$SESSION_BEADS_FILE" || MAP_QUERY_RC=1
+     gc bd --city="$GC_CITY_PATH" list --type=session --label=gc:session --include-infra --include-gates --all --json --limit=0 > "$SESSION_BEADS_FILE" || MAP_QUERY_RC=1
 
      if [ "$MAP_QUERY_RC" -eq 0 ]; then
        LIVENESS_MAP=$(jq -n --slurpfile sessions "$SESSIONS_FILE" --slurpfile session_beads "$SESSION_BEADS_FILE" '
@@ -1220,29 +1220,37 @@ valid gc bd type and matches nothing). They are also ephemeral, so they live
 in the wisps tier that `gc bd list` hides without `--include-infra` — drop that
 flag and this query returns `[]` even when a wisp is already queued.
 ```bash
-OPEN_WISPS=$(gc bd list --assignee="$GC_AGENT" --status=open --type=molecule --include-infra --limit=0 --json | jq -r '.[].id')
+set -euo pipefail
+OPEN_WISPS=$(gc bd --city="$GC_CITY_PATH" list --assignee="$GC_AGENT" --status=open --type=molecule --include-infra --limit=0 --json | jq -r '.[].id')
 NEXT=$(printf '%s\n' $OPEN_WISPS | sed -n '1p')
 for extra in $(printf '%s\n' $OPEN_WISPS | sed '1d'); do
-  gc bd mol burn "$extra" --force
+  gc bd --city="$GC_CITY_PATH" mol burn "$extra" --force
 done
 if [ -z "$NEXT" ]; then
-  NEXT=$(gc bd mol wisp mol-witness-patrol --root-only --var binding_prefix='{{binding_prefix}}' --json | jq -r '.new_epic_id')
-  gc bd update "$NEXT" --assignee="$GC_AGENT"
+  NEXT=$(gc bd --city="$GC_CITY_PATH" mol wisp mol-witness-patrol --root-only --var binding_prefix='{{binding_prefix}}' --json | jq -r '.new_epic_id // empty')
+  if [ -z "$NEXT" ]; then
+    echo "Could not pour next witness wisp; not burning."
+    exit 1
+  fi
+  gc bd --city="$GC_CITY_PATH" update "$NEXT" --assignee="$GC_AGENT"
 fi
 ```
 
 **3. Burn this wisp:**
 ```bash
-gc bd mol burn <this-wisp-id> --force
+gc bd --city="$GC_CITY_PATH" mol burn <this-wisp-id> --force
 ```
 
 **4. Exit this turn:**
-Write exactly:
+The successor is assigned work, so do not emit an idle signal. Check the
+hook immediately, then request a fresh provider session through the native
+runtime. This keeps the singleton spawn trigger from going stale across
+in-session iterations; the restarted session resumes from it.
+```bash
+gc hook
+gc runtime request-restart
 ```
-IDLE: no work, exiting turn.
-```
-Then stop immediately. Do NOT sleep, call ScheduleWakeup, or use Monitor.
-The session_sleep policy will restart this session after the configured idle interval;
-the next wisp is already assigned and the restarted session resumes from it.
+The restart call blocks until the controller replaces this session. Do not
+sleep or use a separate wake timer.
 
-**Exit criteria:** Next wisp poured, this wisp burned, turn ended with IDLE signal."""
+**Exit criteria:** Next wisp poured, this wisp burned, fresh session requested with the successor already assigned."""

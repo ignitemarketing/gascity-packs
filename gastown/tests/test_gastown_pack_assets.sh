@@ -186,8 +186,8 @@ test_work_bead_resolution_discriminator_is_pinned() {
     # for its whole life and the restarted session gets a fresh trigger. An
     # in-session loop here revives the stale-trigger failure with both config
     # pins still green.
-    grep -F 'IDLE: no work, exiting turn.' "$deacon" >/dev/null ||
-        fail "the deacon's trigger-first wisp resolution is safe only while each iteration ends by exiting the turn; mol-deacon-patrol.toml no longer emits the IDLE exit signal"
+    grep -F 'gc runtime request-restart' "$deacon" >/dev/null ||
+        fail "the deacon's trigger-first wisp resolution is safe only while each iteration ends by exiting the turn; mol-deacon-patrol.toml no longer requests a fresh session"
     grep -F 'the restarted session resumes from it' "$deacon" >/dev/null ||
         fail "the deacon's trigger-first wisp resolution is safe only while the successor wisp is resumed by a RESTARTED session (fresh trigger); mol-deacon-patrol.toml no longer hands the successor to a restarted session"
     ! grep -F 're-read formula steps to begin' "$deacon" >/dev/null ||
@@ -315,9 +315,9 @@ test_witness_wisp_queries_pin_include_infra() {
     # still carry the bare form and are tracked separately in #252, so a
     # pack-wide assertion would fail here instead of guarding this contract.
     total=$(grep -h -- '--type=molecule' "$prompt" "$formula" |
-        grep -c -F 'gc bd list' || true)
+        grep -c -E 'gc bd( --city="[^"]+")? list' || true)
     flagged=$(grep -h -- '--type=molecule' "$prompt" "$formula" |
-        grep -F 'gc bd list' | grep -c -- '--include-infra' || true)
+        grep -E 'gc bd( --city="[^"]+")? list' | grep -c -- '--include-infra' || true)
 
     # -ge, not -eq: the flagged/total assertion below owns the contract, so an
     # exact count only adds a cardinality pin -- and a legitimate sixth query,
@@ -474,9 +474,9 @@ test_boot_wisp_queries_pin_include_infra() {
     # this commit) because the deacon and refinery sites are still bare and
     # tracked separately in #252.
     total=$(grep -h -- '--type=molecule' "$prompt" "$formula" |
-        grep -c -F 'gc bd list' || true)
+        grep -c -E 'gc bd( --city="[^"]+")? list' || true)
     flagged=$(grep -h -- '--type=molecule' "$prompt" "$formula" |
-        grep -F 'gc bd list' | grep -c -- '--include-infra' || true)
+        grep -E 'gc bd( --city="[^"]+")? list' | grep -c -- '--include-infra' || true)
 
     # -ge for the same reason as the witness guard: the flagged/total assertion
     # owns the contract, so the count is a floor that catches a deleted query
@@ -510,9 +510,9 @@ test_boot_patrol_burn_resolves_current_wisp() {
 
         grep -qF 'CURRENT_WISP=${GC_BEAD_ID:-}' "$asset" ||
             fail "$name must seed CURRENT_WISP from \$GC_BEAD_ID"
-        grep -q -- 'CURRENT_WISP=\$(gc bd list .*--status=in_progress .*--include-infra' "$asset" ||
+        grep -qE -- 'CURRENT_WISP=\$\(gc bd( --city="[^"]+")? list .*--status=in_progress .*--include-infra' "$asset" ||
             fail "$name must fall back to an in-progress wisp query when \$GC_BEAD_ID is unset"
-        grep -qF 'gc bd mol burn "$CURRENT_WISP" --force' "$asset" ||
+        grep -qE 'gc bd( --city="[^"]+")? mol burn "\$CURRENT_WISP" --force' "$asset" ||
             fail "$name must burn the resolved \$CURRENT_WISP"
     done
 

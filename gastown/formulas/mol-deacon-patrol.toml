@@ -1,8 +1,8 @@
 description = """
 Deacon patrol loop. Poured as a root-only wisp on startup:
 
-  gc bd mol wisp mol-deacon-patrol --root-only --var binding_prefix='{{binding_prefix}}'
-  gc bd update $WISP --assignee=$GC_AGENT
+  gc bd --city="$GC_CITY_PATH" mol wisp mol-deacon-patrol --root-only --var binding_prefix='{{binding_prefix}}'
+  gc bd --city="$GC_CITY_PATH" update $WISP --assignee=$GC_AGENT
 
 Each wisp is ONE iteration: check inbox, run town-wide coordination
 tasks, pour the next iteration. On crash, re-read the formula steps
@@ -272,13 +272,33 @@ closes that gap.
 - `B` = the most recent bead.updated_at across those beads (work signal)
 
 ```bash
-gc agents list --json --active | jq -r '.[] | .agent_id' | while read -r AGENT; do
-    ASSIGNED=$(gc bd list --status=open --assignee="$AGENT" --json --limit=0 | jq 'length')
-    LATEST=$(gc bd list --status=open --assignee="$AGENT" --json --limit=0 \\
-        | jq -r '[.[].updated_at] | max // ""')
-    printf '%s\\t%s\\t%s\\n' "$AGENT" "$ASSIGNED" "$LATEST"
-done
+# A failed roster or queue read is not an empty queue.
+SESSIONS=$(gc session list --json) || exit 1
+SESSION_ROWS=$(printf '%s' "$SESSIONS" | jq -r '
+  if type != "object" or (.sessions | type) != "array"
+  then error("unreadable session roster")
+  else .sessions[] | select(.state == "active" and .closed != true)
+    | ([.agent_name, .template, .name]
+       | map(select(type == "string" and length > 0)) | .[0]) as $agent
+    | if ($agent == null) or (.name | type) != "string" or .name == ""
+      then error("missing session or assignee identity")
+      else [.name, $agent] | @tsv end
+  end') || exit 1
+while IFS="$(printf '\\t')" read -r SESSION AGENT; do
+    [ -n "$AGENT" ] || continue
+    # gc ready federates city, graph and rig stores, independent of CWD.
+    QUEUE=$(gc ready --status=open --assignee="$AGENT" --json --limit=0) || exit 1
+    STATS=$(printf '%s' "$QUEUE" | jq -r '
+      if type != "array" then error("unreadable assigned queue")
+      else [length, ([.[].updated_at] | max // "")] | @tsv end') || exit 1
+    printf '%s\\t%s\\t%s\\n' "$SESSION" "$AGENT" "$STATS"
+done <<< "$SESSION_ROWS"
 ```
+
+Rows contain the exact session name (nudge target), assignee identity, count
+and latest update. Never use a numeric session ID as an assignee, or strip
+a rig/binding prefix. An unreadable query must be investigated, not reported
+as zero work.
 
 The latest bead.updated_at is the cheapest proxy for "did this session
 move work recently?" — every claim, status transition, metadata update,
@@ -555,16 +575,16 @@ them.
 # or the deacon gains a second slot.
 CURRENT_WISP=${GC_BEAD_ID:-${GC_TRIGGER_WORK_BEAD_ID:-}}
 if [ -z "$CURRENT_WISP" ]; then
-  CURRENT_WISP=$(gc bd list --assignee="$GC_AGENT" --status=in_progress --type=molecule --limit=1 --json | jq -r '.[0].id // empty')
+  CURRENT_WISP=$(gc bd --city="$GC_CITY_PATH" list --assignee="$GC_AGENT" --status=in_progress --type=molecule --include-infra --limit=1 --json | jq -r '.[0].id // empty')
 fi
 
-NEXT=$(gc bd mol wisp mol-deacon-patrol --root-only --var binding_prefix='{{binding_prefix}}' --json | jq -r '.new_epic_id // empty')
+NEXT=$(gc bd --city="$GC_CITY_PATH" mol wisp mol-deacon-patrol --root-only --var binding_prefix='{{binding_prefix}}' --json | jq -r '.new_epic_id // empty')
 if [ -z "$NEXT" ]; then
   echo "Could not pour next deacon wisp; not burning."
   gc runtime drain-ack
   exit 1
 fi
-if ! gc bd update "$NEXT" --assignee="$GC_AGENT"; then
+if ! gc bd --city="$GC_CITY_PATH" update "$NEXT" --assignee="$GC_AGENT"; then
   echo "Could not assign next deacon wisp; not burning."
   gc runtime drain-ack
   exit 1
@@ -574,7 +594,7 @@ fi
 **4. Burn this wisp before waiting:**
 ```bash
 if [ -n "$CURRENT_WISP" ]; then
-  gc bd mol burn "$CURRENT_WISP" --force
+  gc bd --city="$GC_CITY_PATH" mol burn "$CURRENT_WISP" --force
 else
   echo "Could not resolve current deacon wisp; not burning."
   gc runtime drain-ack
@@ -582,17 +602,19 @@ else
 fi
 ```
 
-Do not sleep with the current wisp still open. The backoff belongs to the
-already-assigned successor wisp; if the session restarts during the sleep, the
-successor remains the single resumable patrol item.
+Do not restart with the current wisp still open. After it is burned,
+the already-assigned successor remains the single resumable patrol item.
 
 **5. Exit this turn:**
-Write exactly:
+The successor is assigned work, so do not emit an idle signal. Check the
+hook immediately, then request a fresh provider session through the native
+runtime. This keeps the singleton spawn trigger from going stale across
+in-session iterations; the restarted session resumes from it.
+```bash
+gc hook
+gc runtime request-restart
 ```
-IDLE: no work, exiting turn.
-```
-Then stop immediately. Do NOT sleep, call ScheduleWakeup, or use Monitor.
-The session_sleep policy will restart this session after the configured idle interval;
-the next wisp is already assigned and the restarted session resumes from it.
+The restart call blocks until the controller replaces this session. Do not
+sleep or use a separate wake timer.
 
-**Exit criteria:** Next wisp poured and assigned, this wisp burned, turn ended with IDLE signal."""
+**Exit criteria:** Next wisp poured and assigned, this wisp burned, fresh session requested with the successor already assigned."""

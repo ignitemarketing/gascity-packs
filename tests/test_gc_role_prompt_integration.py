@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import textwrap
 
@@ -341,3 +342,55 @@ def test_registered_claim_command_dispatches_store_aware_show_and_normalizes_jso
         "hook --claim --drain-ack --json",
         " ".join(("b" + "d", "show", "bd-123", "--json")),
     ]
+
+def test_real_gc_hook_and_city_reconciliation_match_from_rig(tmp_path, gc_test_bin):
+    workspace = write_gastown_sling_workspace(tmp_path)
+    config = workspace.city_dir / "city.toml"
+    config.write_text(config.read_text().replace('provider = "file"', 'provider = "bd"'))
+    identity = "fixture/gastown.witness"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "gc").symlink_to(gc_test_bin)
+    # The actual gc binary selects stores and runs its hook query. Only the
+    # backend is stubbed, so no Dolt daemon or real-city credentials are needed.
+    stub = bin_dir / "bd"
+    stub.write_text('''#!/usr/bin/env python3
+import json, os, sys
+from pathlib import Path
+rows = json.loads(Path("records.json").read_text())
+args = sys.argv[1:]
+for key in ("assignee", "status", "type"):
+    flag = "--" + key
+    value = next((x.split("=", 1)[1] for x in args if x.startswith(flag + "=")), None)
+    if value is None and flag in args: value = args[args.index(flag) + 1]
+    if value: rows = [r for r in rows if r.get("issue_type" if key == "type" else key) == value]
+print(json.dumps(rows))
+''')
+    stub.chmod(0o755)
+    bead = {"id": "town-patrol", "title": "mol-witness-patrol", "status": "open",
+            "issue_type": "molecule", "assignee": identity, "ephemeral": True,
+            "priority": 2, "created_at": "2026-10-10T18:00:00Z", "metadata": {}}
+    for directory, rows in ((workspace.city_dir, [bead]), (workspace.rig_dir, [])):
+        (directory / ".beads").mkdir(exist_ok=True)
+        (directory / "records.json").write_text(json.dumps(rows))
+    env = {**workspace.env, "GC_AGENT": identity, "GC_BEADS": "bd",
+           "PATH": f"{bin_dir}:{os.environ['PATH']}"}
+    hook = run_gc(gc_test_bin, workspace, "hook", identity, "--json", env=env)
+    assert hook.returncode == 0, hook.stderr
+    city_query = run_gc(gc_test_bin, workspace, "bd", "--city", str(workspace.city_dir),
+                        "list", "--assignee=" + identity, "--status=open", "--type=molecule",
+                        "--include-infra", "--json", env=env)
+    assert city_query.returncode == 0, city_query.stderr
+    assert [r["id"] for r in json.loads(hook.stdout)] == [bead["id"]]
+    assert [r["id"] for r in json.loads(city_query.stdout)] == [bead["id"]]
+    prompt = (REPO_ROOT / "gastown/agents/witness/prompt.template.md").read_text()
+    protocol = prompt.split("## Startup Protocol", 1)[1].split("## CRITICAL:", 1)[0]
+    script = re.findall(r"```bash\n(.*?)\n```", protocol, re.S)[0]
+    script = script.replace("{{ .CityRoot }}", str(workspace.city_dir))
+    resumed = subprocess.run(["bash", "-c", script],
+                             cwd=workspace.rig_dir, env=env, text=True, capture_output=True)
+    assert resumed.returncode == 0, resumed.stderr
+    assert "Resuming patrol wisp town-patrol" in resumed.stdout
+    rig_query = run_gc(gc_test_bin, workspace, "bd", "--rig=fixture", "list", "--json", env=env)
+    assert rig_query.returncode == 0, rig_query.stderr
+    assert json.loads(rig_query.stdout) == []

@@ -61,11 +61,11 @@ Your formula: `mol-deacon-patrol`
 gc mail inbox
 
 # Step 3: Still nothing? Create patrol wisp (root-only — no child step beads)
-NEW_WISP=$(gc bd mol wisp mol-deacon-patrol --root-only --var binding_prefix={{ .BindingPrefix }} --json | jq -r '.new_epic_id')
-gc bd update "$NEW_WISP" --assignee="$GC_ALIAS"
+NEW_WISP=$(gc bd --city="{{ .CityRoot }}" mol wisp mol-deacon-patrol --root-only --var binding_prefix={{ .BindingPrefix }} --json | jq -r '.new_epic_id')
+gc bd --city="{{ .CityRoot }}" update "$NEW_WISP" --assignee="$GC_ALIAS"
 
 # Step 4: Read the formula recipe — these are the steps to execute
-# (Use 'gc bd formula show' for the recipe on disk; 'gc bd mol show' is
+# (Use 'gc bd formula show' for the recipe on disk; 'gc bd --city="{{ .CityRoot }}" mol show' is
 #  for poured molecule instances, not formulas, and will say 'not found'.)
 gc bd formula show mol-deacon-patrol
 
@@ -89,29 +89,29 @@ If `next-iteration` already ran, do not pour again; run `gc hook`.
 ```bash
 CURRENT_WISP=${GC_BEAD_ID:-}
 if [ -z "$CURRENT_WISP" ]; then
-  CURRENT_WISP=$(gc bd list --assignee="$GC_AGENT" --status=in_progress --type=molecule --limit=1 --json | jq -r '.[0].id // empty')
+  CURRENT_WISP=$(gc bd --city="{{ .CityRoot }}" list --assignee="$GC_AGENT" --status=in_progress --type=molecule --include-infra --limit=1 --json | jq -r '.[0].id // empty')
 fi
-ASSIGNED_WISP=$(gc bd list --assignee="$GC_AGENT" --status=open --type=molecule --limit=1 --json | jq -r '.[0].id // empty')
+ASSIGNED_WISP=$(gc bd --city="{{ .CityRoot }}" list --assignee="$GC_AGENT" --status=open --type=molecule --include-infra --limit=1 --json | jq -r '.[0].id // empty')
 if [ -n "$CURRENT_WISP" ] && [ -z "$ASSIGNED_WISP" ]; then
-  NEXT=$(gc bd mol wisp mol-deacon-patrol --root-only --var binding_prefix={{ .BindingPrefix }} --json | jq -r '.new_epic_id // empty')
+  NEXT=$(gc bd --city="{{ .CityRoot }}" mol wisp mol-deacon-patrol --root-only --var binding_prefix={{ .BindingPrefix }} --json | jq -r '.new_epic_id // empty')
   if [ -z "$NEXT" ]; then
     echo "Could not pour next deacon wisp; not burning."
     exit 1
   fi
-  if ! gc bd update "$NEXT" --assignee="$GC_AGENT"; then
+  if ! gc bd --city="{{ .CityRoot }}" update "$NEXT" --assignee="$GC_AGENT"; then
     echo "Could not assign next deacon wisp; not burning."
     exit 1
   fi
-  gc bd mol burn "$CURRENT_WISP" --force
+  gc bd --city="{{ .CityRoot }}" mol burn "$CURRENT_WISP" --force
 elif [ -n "$CURRENT_WISP" ]; then
-  gc bd mol burn "$CURRENT_WISP" --force
+  gc bd --city="{{ .CityRoot }}" mol burn "$CURRENT_WISP" --force
 elif [ -z "$ASSIGNED_WISP" ]; then
-  NEXT=$(gc bd mol wisp mol-deacon-patrol --root-only --var binding_prefix={{ .BindingPrefix }} --json | jq -r '.new_epic_id // empty')
+  NEXT=$(gc bd --city="{{ .CityRoot }}" mol wisp mol-deacon-patrol --root-only --var binding_prefix={{ .BindingPrefix }} --json | jq -r '.new_epic_id // empty')
   if [ -z "$NEXT" ]; then
     echo "Could not bootstrap next deacon wisp."
     exit 1
   fi
-  if ! gc bd update "$NEXT" --assignee="$GC_AGENT"; then
+  if ! gc bd --city="{{ .CityRoot }}" update "$NEXT" --assignee="$GC_AGENT"; then
     echo "Could not assign bootstrap deacon wisp."
     exit 1
   fi
